@@ -147,6 +147,20 @@ svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke
 #workout[data-mode="4x4"] .kcal-v{font-size:30px;line-height:1}
 #workout[data-mode="4x4"] .kcal-l{margin:0}
 #workout[data-mode="4x4"] .facts{display:none}
+.spd{flex:none;margin-bottom:9px}
+.spd-v{font:600 clamp(44px,min(15vw,8.6vh),76px)/.84 var(--num);margin-left:-1px;display:flex;align-items:baseline;gap:5px}
+.spd-v small{font:500 13.5px/1 var(--ui);color:var(--ink-2)}
+.spd-s{font-size:12.5px;line-height:1.2;color:var(--ink-3);margin-top:5px}
+.spd[data-s="weak"] .spd-s,.spd[data-s="slow"] .spd-s,.spd[data-s="lost"] .spd-s,.spd[data-s="denied"] .spd-s,.spd[data-s="none"] .spd-s{color:var(--warn)}
+#workout.gps[data-mode="free"] .kcal{display:flex;align-items:baseline;gap:6px}
+#workout.gps[data-mode="free"] .kcal-v{font-size:34px;line-height:1}
+#workout.gps[data-mode="free"] .kcal-l{margin:0}
+#workout[data-mode="4x4"] .spd{margin:auto 0 0;display:flex;align-items:baseline;justify-content:space-between;gap:8px;border-top:1px solid var(--line);padding-top:6px}
+#workout[data-mode="4x4"] .spd-v{font-size:30px;line-height:1}
+#workout[data-mode="4x4"] .spd-s{margin:0;font-size:13.5px;color:var(--ink-2);white-space:nowrap}
+#workout.gps[data-mode="4x4"] .kcal{margin-top:5px;border-top:0;padding-top:0}
+.sw[data-s="denied"] small,.sw[data-s="none"] small,.sw[data-s="slow"] small,.sw[data-s="weak"] small,.sw[data-s="lost"] small{color:var(--warn)}
+.sw[data-s="ok"] small{color:var(--ok)}
 #workout.paused .w-grid{opacity:.45}
 
 .c-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 8px 0 12px;flex:none;min-height:40px}
@@ -183,6 +197,7 @@ svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .sm-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:12px 16px 14px}
 .sm-stats b{display:block;font:600 34px/.9 var(--num)}
 .sm-stats span{font-size:13px;color:var(--ink-2)}
+.sm-gps{grid-template-columns:repeat(3,minmax(0,1fr));padding-top:0}
 .sm-chart{height:210px;background:var(--well);border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column;flex:none}
 .sm-sec{padding:16px 16px 0}
 .sm-sec h3{font:600 17px/1.2 var(--ui);margin-bottom:8px}
@@ -261,6 +276,9 @@ button.sw svg{color:var(--ink-3)}
 @media (max-height:600px){
   .mini button{height:24px}
   .w-head{height:40px}
+  .spd{margin-bottom:5px}
+  #workout.gps[data-mode="free"] .facts div{padding:3px 0 2px}
+  #workout.gps[data-mode="free"] .facts dd{font-size:19px}
 }
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
@@ -353,9 +371,14 @@ button.sw svg{color:var(--ink-3)}
           <div id="phTarget" class="ph-target"></div>
           <div id="phNext" class="ph-next"></div>
         </div>
+        <div id="speed" class="spd" hidden>
+          <div class="spd-v"><span id="spdV" class="tn">–</span><small>km/h</small></div>
+          <div id="spdS" class="spd-s"></div>
+        </div>
         <div class="kcal"><div id="kcal" class="kcal-v">0</div><div class="kcal-l">kcal burned</div></div>
         <dl class="facts">
           <div><dt>Time</dt><dd id="fTime" class="tn">0:00</dd></div>
+          <div id="fDistRow" hidden><dt>Distance</dt><dd id="fDist" class="tn">0.00 km</dd></div>
           <div><dt>Average</dt><dd id="fAvg" class="tn">–</dd></div>
           <div><dt>Max</dt><dd id="fMax" class="tn">–</dd></div>
         </dl>
@@ -382,6 +405,11 @@ button.sw svg{color:var(--ink-3)}
     <div><b id="smKcal"></b><span>kcal</span></div>
     <div><b id="smAvg"></b><span>Average</span></div>
     <div><b id="smMax"></b><span>Max</span></div>
+  </div>
+  <div id="smGps" class="sm-stats sm-gps" hidden>
+    <div><b id="smDist" class="tn"></b><span>km</span></div>
+    <div><b id="smSpd" class="tn"></b><span>Average km/h</span></div>
+    <div><b id="smTop" class="tn"></b><span>Top km/h</span></div>
   </div>
   <div class="sm-chart">
     <div class="c-head"><div class="legend"><i class="k"></i>Median<i id="smLegT" class="k2" hidden></i><span id="smLegTt" hidden>Target</span></div><div id="smLegS" class="legend"></div></div>
@@ -433,7 +461,7 @@ const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${
 const now = () => Date.now();
 const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(what + ' timed out')), ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
 
-const BUILD = 3;   // shown in Settings, so it is clear which version a phone is running
+const BUILD = 4;   // shown in Settings, so it is clear which version a phone is running
 /* A short connection log, shown in Settings, so a failure on real hardware can be read off the screen. */
 const LOG = [], T0 = Date.now();
 function log(who, msg) { LOG.push(`${((Date.now() - T0) / 1000).toFixed(1)}s  ${who ? who.def.name : 'App'}: ${msg}`); if (LOG.length > 160) LOG.shift(); }
@@ -444,7 +472,7 @@ let FRAMED = false; try { FRAMED = window.top !== window.self; } catch (e) { FRA
 /* ---------- your numbers ----------
    No personal numbers ship with this page. You enter them once and they are kept in this browser only
    (localStorage). Until then the generic values below keep the preview and the simulated sensors working. */
-const DEF = { weight: 75, height: 175, age: 40, sex: 'm', maxHr: 185, zones: [105, 133, 146, 160, 172], profileSet: false, sound: true, voice: true, autoConnect: true, demoSpeed: 1 };
+const DEF = { weight: 75, height: 175, age: 40, sex: 'm', maxHr: 185, zones: [105, 133, 146, 160, 172], profileSet: false, sound: true, voice: true, autoConnect: true, gps: false, demoSpeed: 1 };
 const CFG = Object.assign({}, DEF, store.get('quorum.cfg', {}));
 const saveCfg = () => store.set('quorum.cfg', CFG);
 /* Checks a set of personal numbers; returns a sentence when something is off, '' when they are fine. */
@@ -852,6 +880,7 @@ const Demo = {
     const target = this.drive(sec);
     this.hr += (target - this.hr) / (target > this.hr ? 38 : 55);
     this.buf.push(this.hr); if (this.buf.length > 12) this.buf.shift();
+    if (W.gps) { const z = CFG.zones, f = clamp((this.hr - z[0]) / (CFG.maxHr - z[0]), 0, 1); Geo.sim = { v: 2 + 2.9 * f + (Math.random() - 0.5) * 0.12, acc: 4 + Math.random() * 2, status: 'ok', lat: NaN, lon: NaN }; }
     this.emit(sec);
   },
   idle() {
@@ -924,6 +953,80 @@ const Wake = {
   off() { this.bluefy(false); try { if (this.lock) this.lock.release(); } catch (e) {} this.lock = null; }
 };
 
+/* ---------- GPS speed (only when switched on for a workout) ----------
+   Speed comes from the phone's GPS chip when the browser passes it on (it measures speed directly, which is
+   more exact than comparing positions). Otherwise it is worked out from the distance covered over the last
+   few seconds. Distance is the speed added up over time. Positions never leave the phone. */
+const GPS_GOOD = 25, GPS_USABLE = 65;   // metres of reported accuracy: good / still usable
+const haversine = (a, b) => {
+  const R = 6371008.8, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
+  const h = Math.pow(Math.sin(dLat / 2), 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.pow(Math.sin(dLon / 2), 2);
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+};
+const Geo = {
+  watchId: null, status: 'off', acc: null, v: null, at: 0, tFix: 0, t0: 0, lat: NaN, lon: NaN, fixes: [], src: '', said: false, moaned: false, sim: null,
+  start() {
+    if (Demo.on) { this.status = 'ok'; this.sim = this.sim || { v: 0, acc: 4, status: 'ok', lat: NaN, lon: NaN }; return; }
+    if (this.watchId != null) return;
+    if (!navigator.geolocation) { this.status = 'none'; log(null, 'GPS: this browser has no location access'); return; }
+    this.status = 'asking'; this.v = null; this.acc = null; this.fixes = []; this.said = false; this.moaned = false; this.at = 0; this.tFix = 0; this.t0 = performance.now();
+    try { this.watchId = navigator.geolocation.watchPosition(p => this.onPos(p), e => this.onErr(e), { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }); log(null, 'GPS: asked for the position'); }
+    catch (e) { this.status = 'none'; log(null, `GPS: could not start (${errText(e)})`); }
+  },
+  stop() {
+    if (this.watchId != null) { try { navigator.geolocation.clearWatch(this.watchId); } catch (e) {} }
+    this.watchId = null; this.status = 'off'; this.v = null; this.acc = null; this.fixes = []; this.sim = null;
+  },
+  onErr(e) {
+    if (e && e.code === 1) { log(null, `GPS: location refused (${e.message || 'permission denied'})`); this.stop(); this.status = 'denied'; }
+    else {
+      if (!this.moaned) { this.moaned = true; log(null, `GPS: no position yet (${(e && e.message) || 'no details'})`); }
+      if (this.status !== 'asking') this.status = 'lost';
+    }
+  },
+  onPos(p) {
+    const c = p.coords, t = performance.now(), ts = p.timestamp || Date.now(), acc = c.accuracy;
+    this.acc = acc; this.at = t;
+    if (!(acc <= GPS_USABLE)) { this.status = 'weak'; return; }          // too vague to use
+    this.status = acc <= GPS_GOOD ? 'ok' : 'weak';
+    this.lat = c.latitude; this.lon = c.longitude;
+    const fix = { ts, lat: c.latitude, lon: c.longitude };
+    this.fixes.push(fix); while (this.fixes.length > 2 && ts - this.fixes[1].ts >= 4000) this.fixes.shift();
+    let raw = null, tau = 1.5;
+    if (typeof c.speed === 'number' && isFinite(c.speed) && c.speed >= 0) { raw = c.speed; this.src = 'the GPS chip'; }
+    else {
+      const old = this.fixes[0], dt = (ts - old.ts) / 1000;              // about 4 s back: averages out position jitter
+      if (dt >= 2.5 && dt <= 12) { raw = haversine(old, fix) / dt; tau = 2.5; this.src = 'positions'; }
+    }
+    if (raw == null) return;
+    if (raw < 0.3) raw = 0;                                              // standing still
+    const dt = this.tFix ? Math.min(5, (t - this.tFix) / 1000) : 0;
+    this.v = this.v == null || !dt ? raw : this.v + (raw - this.v) * (1 - Math.exp(-dt / tau));
+    if (this.v < 0.15) this.v = 0;
+    this.tFix = t;
+    if (!this.said) { this.said = true; log(null, `GPS: first fix, accurate to ${Math.round(acc)} m, speed from ${this.src}`); }
+  },
+  /* What to show right now: speed in m/s (null when there is none), accuracy, status, position. */
+  read() {
+    if (Demo.on) return this.sim || { v: null, acc: null, status: 'asking', lat: NaN, lon: NaN };
+    const t = performance.now(); let st = this.status;
+    if (st === 'asking' && t - this.t0 > 25000) st = 'slow';
+    if ((st === 'ok' || st === 'weak') && t - this.at > 6000) st = 'lost';
+    const fresh = (st === 'ok' || st === 'weak') && this.tFix && t - this.tFix < 6000;
+    return { v: fresh ? this.v : null, acc: this.acc, status: st, lat: fresh ? this.lat : NaN, lon: fresh ? this.lon : NaN };
+  }
+};
+const gpsShort = g => g.status === 'ok' ? `GPS ±${Math.round(g.acc)} m` : g.status === 'weak' ? `Weak GPS ±${Math.round(g.acc)} m` : g.status === 'asking' ? 'Finding GPS' : g.status === 'slow' ? 'No GPS yet' : g.status === 'lost' ? 'GPS lost' : g.status === 'denied' ? 'Location blocked' : g.status === 'none' ? 'No location here' : 'GPS off';
+const gpsLong = g => g.status === 'ok' ? `GPS ready, accurate to ${Math.round(g.acc)} m.`
+  : g.status === 'weak' ? `Weak signal, accurate to ${Math.round(g.acc)} m. It improves outdoors under open sky.`
+  : g.status === 'asking' ? 'Finding your position…'
+  : g.status === 'slow' ? 'Still no position. GPS needs a clear view of the sky. If this never changes, Bluefy may not pass location on to pages.'
+  : g.status === 'lost' ? 'GPS signal lost. Still trying.'
+  : g.status === 'denied' ? 'Location is blocked. Allow it for Bluefy in iOS Settings under Privacy & Security, Location Services. If Bluefy is not listed there, it cannot give pages a position.'
+  : g.status === 'none' ? 'This browser gives pages no location access.'
+  : 'Speed and distance from this phone’s location. Nothing leaves the phone.';
+const kmh = v => (v * 3.6).toFixed(1);
+
 /* ---------- workout state ---------- */
 let W = null;              // the workout in progress (or just finished)
 let screen = 'home';
@@ -931,8 +1034,8 @@ function elapsed() { return W ? ((W.pausedAt || now()) - W.t0 - W.paused) / 1000
 function newWorkout(mode) {
   const plan = mode === '4x4' ? buildPlan() : null;
   return { mode, plan, rate: Demo.on ? Demo.speed : 1, demo: Demo.on, startedAt: now(), t0: now(), paused: 0, pausedAt: 0, ended: false, endT: 0,
-    kcal: 0, kLast: null, n: 0, sum: 0, max: 0, zoneSec: [0, 0, 0, 0, 0, 0], lastSec: -1,
-    hist: { t: [], m: [], s: [[], [], [], []] }, pi: -1, ph: plan ? plan.map(() => ({ sec: 0, n: 0, sum: 0, max: 0, ok: 0 })) : null, checks: [],
+    kcal: 0, kLast: null, n: 0, sum: 0, max: 0, zoneSec: [0, 0, 0, 0, 0, 0], lastSec: -1, gps: false, dist: 0, vTop: 0, gLast: null,
+    hist: { t: [], m: [], s: [[], [], [], []], v: [], la: [], lo: [] }, pi: -1, ph: plan ? plan.map(() => ({ sec: 0, n: 0, sum: 0, max: 0, ok: 0 })) : null, checks: [],
     beepAt: 0, badKind: null, badSince: 0, nudgeAt: 0, savedAt: now() };
 }
 function record(sec, md) {
@@ -944,6 +1047,14 @@ function record(sec, md) {
     W.zoneSec[zoneOf(m)] += dt;
     if (W.kLast && sec - W.kLast.t <= 120) W.kcal += kcalPerMin((m + W.kLast.hr) / 2) * (sec - W.kLast.t) / 60;
     W.kLast = { t: sec, hr: m };
+  }
+  if (W.gps) {
+    const g = Geo.read(), v = g.v;
+    H.v.push(v == null ? NaN : v); H.la.push(g.lat); H.lo.push(g.lon);
+    if (v != null) {
+      if (W.gLast && sec - W.gLast.t <= 10) W.dist += (v + W.gLast.v) / 2 * (sec - W.gLast.t);   // distance = speed added up over time
+      W.gLast = { t: sec, v }; if (v > W.vTop) W.vTop = v;
+    }
   }
   if (W.plan) {
     const pi = phaseIndex(W.plan, sec), ph = W.plan[pi], st = W.ph[pi], tIn = sec - ph.start;
@@ -992,10 +1103,10 @@ function stepWorkout(md) {
   renderWorkout(t, md);
   if (now() - W.savedAt > 10000) saveSession();
 }
-function startWorkout(mode) {
-  if (!CFG.profileSet && !Demo.on) { profileSheet(() => startWorkout(mode)); return; }
+function startWorkout(mode, gps) {
   Sound.unlock();
-  W = newWorkout(mode);
+  W = newWorkout(mode); W.gps = !!gps;
+  if (W.gps) Geo.start();
   enterWorkout();
   if (!median().n && !W.demo) toast('No sensor connected yet. Tap a sensor name under the big number to connect one.', 6000);
 }
@@ -1005,6 +1116,7 @@ function enterWorkout() {
   D.workout.classList.toggle('paused', !!W.pausedAt);
   setText(D.wMode, four ? '4×4 Norwegian' : 'Free workout');
   show(D.wDemo, W.demo); show(D.plan, four); show(D.phase, four); show(D.legT, four); show(D.legTt, four);
+  D.workout.classList.toggle('gps', W.gps); show(D.speed, W.gps); show(D.fDistRow, W.gps);
   if (four) {
     D.planBar.textContent = '';
     W.plan.forEach(p => { const s = mk('div', 'plan-seg ' + p.kind); s.style.flexGrow = p.dur; s.appendChild(mk('i')); D.planBar.appendChild(s); });
@@ -1025,15 +1137,15 @@ function resume() {
 }
 function skipPhase() {
   const t = elapsed(), ph = W.plan[phaseIndex(W.plan, t)];
-  W.t0 -= (ph.end - t + 0.05) / W.rate * 1000; W.lastSec = Math.floor(ph.end) - 1; W.kLast = null;
+  W.t0 -= (ph.end - t + 0.05) / W.rate * 1000; W.lastSec = Math.floor(ph.end) - 1; W.kLast = null; W.gLast = null;
 }
 function finish(auto) {
   if (!W || W.ended) return;
   W.ended = true; W.endT = W.plan ? Math.min(elapsed(), W.plan.total) : elapsed();
   if (auto) Sound.done();
-  Wake.off(); store.del('quorum.session'); closeSheet(true); show(D.flash, false);
+  Wake.off(); Geo.stop(); store.del('quorum.session'); closeSheet(true); show(D.flash, false);
   if (W.hist.t.length < 5) { W = null; go2('home'); return; }
-  buildSummary(); go2('summary'); review.resize();
+  buildSummary(); go2('summary'); D.summary.scrollTop = 0; review.resize();
 }
 
 /* keep an unfinished workout across a reload (Bluefy can reload a tab that sat in the background) */
@@ -1042,7 +1154,8 @@ function saveSession() {
   W.savedAt = now();
   const H = W.hist, r = v => v !== v ? null : Math.round(v * 2) / 2;
   store.set('quorum.session', { v: 1, at: now(), mode: W.mode, startedAt: W.startedAt, t0: W.t0, paused: W.paused, pausedAt: W.pausedAt, kcal: W.kcal, kLast: W.kLast,
-    n: W.n, sum: W.sum, max: W.max, zoneSec: W.zoneSec, lastSec: W.lastSec, pi: W.pi, ph: W.ph, checks: W.checks, t: H.t, m: H.m.map(r), s: H.s.map(a => a.map(r)) });
+    n: W.n, sum: W.sum, max: W.max, zoneSec: W.zoneSec, lastSec: W.lastSec, pi: W.pi, ph: W.ph, checks: W.checks, t: H.t, m: H.m.map(r), s: H.s.map(a => a.map(r)),
+    gps: W.gps, dist: W.dist, vTop: W.vTop, gv: H.v.map(v => v !== v ? null : Math.round(v * 100) / 100), la: H.la.map(v => v !== v ? null : Math.round(v * 1e6) / 1e6), lo: H.lo.map(v => v !== v ? null : Math.round(v * 1e6) / 1e6) });
 }
 function loadSession() {
   const s = store.get('quorum.session', null);
@@ -1057,7 +1170,8 @@ function restoreSession(s) {
   Object.assign(W, { rate: 1, demo: false, startedAt: s.startedAt, t0: s.t0, paused: s.paused, pausedAt: s.pausedAt, kcal: s.kcal, kLast: null, n: s.n, sum: s.sum, max: s.max,
     zoneSec: s.zoneSec, pi: s.pi, checks: s.checks || [] });
   if (s.ph && W.ph && s.ph.length === W.ph.length) W.ph = s.ph;
-  W.hist = { t: s.t, m: s.m.map(nn), s: s.s.map(a => a.map(nn)) };
+  W.hist = { t: s.t, m: s.m.map(nn), s: s.s.map(a => a.map(nn)), v: (s.gv || []).map(nn), la: (s.la || []).map(nn), lo: (s.lo || []).map(nn) };
+  W.gps = !!s.gps; W.dist = s.dist || 0; W.vTop = s.vTop || 0; if (W.gps) Geo.start();
   W.lastSec = Math.floor(elapsed()) - 1;
   if (W.pausedAt) { W.paused += now() - W.pausedAt; W.pausedAt = 0; }   // resume straight away
   Sound.unlock(); enterWorkout();
@@ -1244,7 +1358,7 @@ class Chart {
 const D = {};
 ['home', 'workout', 'summary', 'homeDemo', 'homeSlab', 'homeHr', 'homeT1', 'homeT2', 'noBt', 'noBtTitle', 'noBtText', 'btnDemo', 'resume', 'resumeTitle', 'resumeText', 'btnResume', 'btnDiscard',
   'setup', 'btnSetup', 'sCount', 'sList', 'btnAll', 'bluefyNote', 'btnFree', 'btn4x4', 'planBlurb', 'btnSettings', 'wMode', 'wDemo', 'btnSound', 'btnPause', 'plan', 'planBar', 'planTime',
-  'slab', 'slabZone', 'slabN', 'slabHr', 'slabCue', 'cueIcon', 'cueText', 'mini', 'phase', 'phName', 'phTime', 'phTarget', 'phNext', 'kcal', 'fTime', 'fAvg', 'fMax',
+  'slab', 'slabZone', 'slabN', 'slabHr', 'slabCue', 'cueIcon', 'cueText', 'mini', 'phase', 'phName', 'phTime', 'phTarget', 'phNext', 'kcal', 'fTime', 'fAvg', 'fMax', 'speed', 'spdV', 'spdS', 'fDistRow', 'fDist', 'smGps', 'smDist', 'smSpd', 'smTop',
   'legT', 'legTt', 'winSeg', 'chart', 'tip', 'flash', 'flashT', 'flashS', 'smTitle', 'smSub', 'smTime', 'smKcal', 'smAvg', 'smMax', 'smChart', 'smTip', 'smLegT', 'smLegTt', 'smLegS',
   'smPlan', 'smKey', 'smRows', 'smChecks', 'smZones', 'btnCsv', 'btnDone', 'scrim', 'sheet', 'toast'].forEach(id => { D[id] = document.getElementById(id); });
 
@@ -1352,6 +1466,29 @@ function pauseSheet() {
     root.appendChild(btns);
   }, resume);
 }
+/* Shown when a mode is chosen: what is about to start, and the GPS switch. */
+function startSheet(mode) {
+  if (!CFG.profileSet && !Demo.on) { profileSheet(() => startSheet(mode)); return; }
+  let timer = 0, started = false;
+  openSheet(root => {
+    const four = mode === '4x4', k = targets(), n = slots.filter(s => s.state === 'connected').length;
+    sheetHead(root, four ? '4×4 Norwegian' : 'Free workout');
+    root.appendChild(mk('p', 'sh-sub', four ? `40 minutes: 10 warm-up, then 4 × 4 min at ${k.workLo}–${k.workHi} with 3 min easy between, and a 5 min cooldown.` : 'Open-ended. It runs until you end it.'));
+    const row = mk('label', 'sw'), txt = mk('span', '', 'Track speed with GPS'), sub = mk('small'), box = mk('input');
+    txt.appendChild(sub); box.type = 'checkbox'; box.checked = !!CFG.gps; row.append(txt, box); row.style.alignItems = 'flex-start'; row.style.padding = '10px 0'; root.appendChild(row);
+    const paint = () => { const g = Geo.read(); setText(sub, box.checked ? gpsLong(g) : gpsLong({ status: 'off' })); setAttr(row, 'data-s', box.checked ? g.status : 'off'); };
+    box.addEventListener('change', () => { CFG.gps = box.checked; saveCfg(); if (box.checked) Geo.start(); else Geo.stop(); paint(); });
+    if (box.checked) Geo.start();
+    paint(); timer = setInterval(paint, 400);
+    root.appendChild(mk('p', 'sh-sub', n ? `${n} of 4 sensors connected.` : 'No sensor connected yet. You can still start: readings appear when one connects.')).style.margin = '10px 0 12px';
+    const btns = mk('div', 'sh-btns');
+    btns.appendChild(sheetBtn('Start', 'pri', () => {
+      const usable = box.checked && !['denied', 'none'].includes(Geo.read().status);   // no point showing a speed that can never arrive
+      started = usable; clearInterval(timer); if (!usable) Geo.stop(); closeSheet(true); startWorkout(mode, usable);
+    }));
+    root.appendChild(btns);
+  }, () => { clearInterval(timer); if (!started) Geo.stop(); });
+}
 function profileSheet(after) {
   openSheet(root => {
     const first = !CFG.profileSet, val = k => first ? '' : CFG[k];
@@ -1373,7 +1510,7 @@ function profileSheet(after) {
     form.addEventListener('input', () => { err.textContent = ''; });
     const num = i => i.value === '' ? NaN : Math.round(Number(i.value));
     const btns = mk('div', 'sh-btns');
-    btns.appendChild(sheetBtn(after ? 'Save and start' : 'Save', 'pri', () => {
+    btns.appendChild(sheetBtn(after ? 'Save and continue' : 'Save', 'pri', () => {
       const p = { weight: num(iw), height: num(ih), age: num(ia), sex: sel.value, maxHr: num(im), zones: zi.map(num) }, bad = profileProblem(p);
       if (bad) { err.textContent = bad; return; }
       saveProfile(p); refreshPlanText(); renderSetup(); closeSheet(true); toast('Saved in this browser.', 1800);
@@ -1411,7 +1548,7 @@ function logSheet() {
   openSheet(root => {
     sheetHead(root, 'Connection log');
     const yn = v => v ? 'yes' : 'no';
-    const env = `Build ${BUILD}. Bluetooth ${yn(HAS_BT)}, remembers devices ${yn(HAS_BT && BT.getDevices)}, listens for sensors ${yn(slots.some(s => s.device && typeof s.device.watchAdvertisements === 'function'))}, embedded ${yn(FRAMED)}, https ${yn(location.protocol === 'https:')}, screen wake ${yn(navigator.wakeLock)}`;
+    const env = `Build ${BUILD}. Bluetooth ${yn(HAS_BT)}, remembers devices ${yn(HAS_BT && BT.getDevices)}, listens for sensors ${yn(slots.some(s => s.device && typeof s.device.watchAdvertisements === 'function'))}, location ${yn(navigator.geolocation)}, embedded ${yn(FRAMED)}, https ${yn(location.protocol === 'https:')}, screen wake ${yn(navigator.wakeLock)}`;
     const text = env + '\n' + slots.map(s => `${s.def.name}: ${s.state}${s.saved && s.saved.name ? ' (' + s.saved.name + ')' : ''}`).join('\n') + '\n\n' + (LOG.length ? LOG.join('\n') : 'Nothing has happened yet.');
     root.appendChild(mk('p', 'sh-sub', 'If a sensor will not connect, a screenshot of this helps find out why.'));
     root.appendChild(mk('div', 'logbox', text));
@@ -1481,6 +1618,11 @@ function renderWorkout(t, md) {
   setText(D.slabN, !md.n ? '' : md.n === 1 ? '1 sensor' : `median of ${md.n}`);
   slots.forEach((slot, i) => { const v = md.v[i]; setText(slot.mini.v, v == null ? '–' : Math.round(v)); setAttr(slot.mini.mb, 'data-bad', v == null ? 1 : 0); });
   setText(D.kcal, Math.round(W.kcal));
+  if (W.gps) {
+    const g = Geo.read(), dist = (W.dist / 1000).toFixed(2) + ' km', tracking = g.status === 'ok' || g.status === 'weak';
+    setText(D.spdV, g.v == null ? '–' : kmh(g.v)); setAttr(D.speed, 'data-s', g.status);
+    setText(D.spdS, W.plan && tracking ? dist : gpsShort(g)); setText(D.fDist, dist);
+  }
   const cueSvg = D.cueIcon.parentNode;
   if (W.plan) {
     const P = W.plan, pi = phaseIndex(P, t), ph = P[pi], tIn = t - ph.start, left = ph.end - t, cue = cueFor(ph, tIn, hr);
@@ -1506,6 +1648,9 @@ function buildSummary() {
   setText(D.smSub, when + (four && W.endT < W.plan.total - 1 ? `. Ended early, at ${fmt(W.endT)} of ${fmt(W.plan.total)}` : '') + (W.demo ? '. Simulated sensors' : ''));
   setText(D.smTime, fmt(W.endT)); setText(D.smKcal, Math.round(W.kcal));
   setText(D.smAvg, W.n ? Math.round(W.sum / W.n) : '–'); setText(D.smMax, W.max ? Math.round(W.max) : '–');
+  const tracked = W.gps && H.v.some(v => v === v);
+  show(D.smGps, tracked);
+  if (tracked) { setText(D.smDist, (W.dist / 1000).toFixed(2)); setText(D.smSpd, W.endT > 0 ? kmh(W.dist / W.endT) : '–'); setText(D.smTop, kmh(W.vTop)); }
   show(D.smLegT, four); show(D.smLegTt, four);
   D.smLegS.textContent = '';
   SENSORS.forEach(s => { const i = mk('i', 'k'); i.style.background = s.color; i.style.width = '10px'; D.smLegS.append(i, mk('span', '', s.name)); });
@@ -1540,8 +1685,10 @@ function buildSummary() {
   D.summary.scrollTop = 0;
 }
 function csvText() {
-  const H = W.hist, f = v => v !== v ? '' : Math.round(v * 10) / 10, out = ['time_s,median,' + SENSORS.map(s => s.id).join(',') + (W.plan ? ',phase' : '')];
-  for (let i = 0; i < H.t.length; i++) out.push([H.t[i], f(H.m[i])].concat(H.s.map(a => f(a[i])), W.plan ? [W.plan[phaseIndex(W.plan, H.t[i])].short] : []).join(','));
+  const H = W.hist, f = v => v !== v ? '' : Math.round(v * 10) / 10, pos = v => v !== v ? '' : v.toFixed(6);
+  const out = ['time_s,median,' + SENSORS.map(s => s.id).join(',') + (W.gps ? ',speed_kmh,lat,lon' : '') + (W.plan ? ',phase' : '')];
+  for (let i = 0; i < H.t.length; i++) out.push([H.t[i], f(H.m[i])].concat(H.s.map(a => f(a[i])),
+    W.gps ? [f(H.v[i] * 3.6), pos(H.la[i]), pos(H.lo[i])] : [], W.plan ? [W.plan[phaseIndex(W.plan, H.t[i])].short] : []).join(','));
   return out.join('\n');
 }
 async function shareCsv() {
@@ -1561,8 +1708,8 @@ const review = new Chart(D.smChart, D.smTip, () => W && W.ended && { hist: W.his
 
 buildHome(); refreshPlanText(); renderSoundBtn();
 D.btnAll.addEventListener('click', () => { connectAll(false); });
-D.btnFree.addEventListener('click', () => startWorkout('free'));
-D.btn4x4.addEventListener('click', () => startWorkout('4x4'));
+D.btnFree.addEventListener('click', () => startSheet('free'));
+D.btn4x4.addEventListener('click', () => startSheet('4x4'));
 D.btnSettings.addEventListener('click', settingsSheet);
 D.btnSetup.addEventListener('click', () => profileSheet());
 D.btnDemo.addEventListener('click', () => { Demo.start(); show(D.noBt, false); renderSetup(); renderHome(median()); });
@@ -1646,7 +1793,7 @@ requestAnimationFrame(frame);
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { live.draw(); review.draw(); });
 
 // a small handle for testing in a desktop browser
-window.__quorum = { slots, median, CFG, get W() { return W; }, Demo, targets, buildPlan, targetAt, cueFor, kcalPerMin, skipPhase, finish, elapsed };
+window.__quorum = { Geo, slots, median, CFG, get W() { return W; }, Demo, targets, buildPlan, targetAt, cueFor, kcalPerMin, skipPhase, finish, elapsed };
 })();
 
 </script>
