@@ -8,3 +8,5 @@ Open https://kaxap.github.io/quorum-hr/ in Bluefy.
 - Personal numbers (weight, height, age, max heart rate, zones) are entered on first use and stay in the browser.
 - Speed and distance from the phone's GPS are optional: a switch on the start sheet of each workout, off by default. Positions stay on the phone.
 - Add `#demo` to the address to try it with simulated sensors.
+
+Current build: 5. The same number is shown at the bottom of the app's Settings.

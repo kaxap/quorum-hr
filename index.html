@@ -333,7 +333,7 @@ button.sw svg{color:var(--ink-3)}
   <div class="s-head"><h2>Sensors</h2><span id="sCount" class="s-count"></span></div>
   <ul id="sList" class="s-list"></ul>
   <div class="h-tools"><button id="btnAll" class="btn">Connect all 4</button></div>
-  <p id="bluefyNote" class="fine">Bluefy did not keep these sensors. When you pick them, leave its “future background connections” switch on.</p>
+  <p id="bluefyNote" class="fine">Bluefy did not hand these sensors back after the reload. Pick them again.</p>
 
   <footer class="modes">
     <button id="btnFree" class="mode"><b>Free</b><span>Open-ended workout</span></button>
@@ -461,7 +461,7 @@ const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${
 const now = () => Date.now();
 const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(what + ' timed out')), ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
 
-const BUILD = 4;   // shown in Settings, so it is clear which version a phone is running
+const BUILD = 5;   // shown in Settings, so it is clear which version a phone is running
 /* A short connection log, shown in Settings, so a failure on real hardware can be read off the screen. */
 const LOG = [], T0 = Date.now();
 function log(who, msg) { LOG.push(`${((Date.now() - T0) / 1000).toFixed(1)}s  ${who ? who.def.name : 'App'}: ${msg}`); if (LOG.length > 160) LOG.shift(); }
@@ -796,7 +796,10 @@ async function pick(slot, how, auto) {
     if (seq !== slot.pickSeq) return false;
     if (slot.state === 'connected') return false;                     // it connected by itself while the list was open
     const quick = performance.now() - t0 < 500, name = e && e.name;   // nobody closes a picker in half a second
-    if (name === 'SecurityError' || (auto && quick)) { setState(slot, before === 'choosing' ? 'idle' : before); const err = new Error('picker needs a tap'); err.name = 'SecurityError'; throw err; }
+    if (name === 'SecurityError' || (auto && quick)) {
+      setState(slot, before === 'choosing' ? 'idle' : before); if (slot.state === 'lost') scheduleRetry(slot);
+      const err = new Error('picker needs a tap'); err.name = 'SecurityError'; throw err;
+    }
     if (quick && how === 'own' && name !== 'NotFoundError') return pick(slot, 'any');   // the browser turned the name filter down: ask for any heart-rate sensor
     if (slot.device && (slot.ever || slot.seeking)) { setState(slot, 'lost'); scheduleRetry(slot); } else setState(slot, 'missing');
     return false;
@@ -837,26 +840,39 @@ async function reopenRemembered() {
 }
 /* Connect everything at once. Sensors the browser remembers are reopened together, without a list. For the rest the
    lists follow each other without waiting for the previous sensor to finish connecting. auto = started by the app at launch. */
-let chainId = 0, triedInTap = false;
-async function connectAll(auto) {
+let chainId = 0, triedInTap = false, userChains = 0;
+async function connectAll(auto, seekersToo) {
   const id = ++chainId, seekers = () => slots.filter(s => s.state === 'lost' && s.seeking);
-  if (!auto && seekers().length && !triedInTap) {
-    triedInTap = true;
-    log(null, 'tap: trying the remembered sensors once more before opening any list');
-    await reopenRemembered();
-    for (const t = performance.now(); performance.now() - t < 4500 && seekers().length && id === chainId;) await sleep(150);
-    if (id !== chainId) return;
-  }
-  const waiting = s => ['idle', 'missing', 'refused'].includes(s.state) || (s.state === 'lost' && s.seeking);
-  const needsList = s => !s.device || s.state === 'missing' || s.seeking;
-  slots.forEach(s => { if (waiting(s) && !needsList(s)) openLink(s); });
-  for (const slot of slots) {
-    if (id !== chainId) return;
-    if (!waiting(slot) || !needsList(slot)) continue;
-    if (auto && (slot.seeking || !(slot.saved && slot.saved.name))) continue;   // at launch, only ask for saved sensors the browser did not remember
-    try { await pick(slot, 'own', auto); }
-    catch (e) { if (!auto) toast('Tap each remaining sensor to connect it.'); return; }
-  }
+  if (!auto) userChains++;
+  try {
+    if (!auto && seekers().length && !triedInTap) {
+      triedInTap = true;
+      log(null, 'tap: trying the remembered sensors once more before opening any list');
+      await reopenRemembered();
+      for (const t = performance.now(); performance.now() - t < 4500 && seekers().length && id === chainId;) await sleep(150);
+      if (id !== chainId) return;
+    }
+    const waiting = s => ['idle', 'missing', 'refused'].includes(s.state) || (s.state === 'lost' && s.seeking);
+    const needsList = s => !s.device || s.state === 'missing' || s.seeking;
+    slots.forEach(s => { if (waiting(s) && !needsList(s)) openLink(s); });
+    for (const slot of slots) {
+      if (id !== chainId) return;
+      if (!waiting(slot) || !needsList(slot)) continue;
+      if (auto && ((slot.seeking && !seekersToo) || !(slot.saved && slot.saved.name))) continue;   // on its own the app only asks for sensors used before
+      let picked;
+      try { picked = await pick(slot, 'own', auto); }
+      catch (e) { if (!auto) toast('Tap each remaining sensor to connect it.'); return; }
+      if (auto && !picked) return;                                 // a list was closed without a choice: stop opening more of them unasked
+    }
+  } finally { if (!auto) userChains--; }
+}
+/* Remembered sensors that still have not opened a few seconds after launch: offer the lists without waiting to be asked
+   (only where the browser lets a page open one without a tap, and only if "Ask for sensors at launch" is on). */
+function escalate() {
+  if (Demo.on || !CFG.autoConnect || userChains || triedInTap) return;
+  const n = slots.filter(s => s.state === 'lost' && s.seeking).length; if (!n) return;
+  log(null, `${n} remembered sensor(s) still not open after 6 s: trying the lists`);
+  connectAll(true, true);
 }
 
 /* ---------- simulated sensors (for trying the app without hardware) ---------- */
@@ -1017,7 +1033,8 @@ const Geo = {
   }
 };
 const gpsShort = g => g.status === 'ok' ? `GPS ±${Math.round(g.acc)} m` : g.status === 'weak' ? `Weak GPS ±${Math.round(g.acc)} m` : g.status === 'asking' ? 'Finding GPS' : g.status === 'slow' ? 'No GPS yet' : g.status === 'lost' ? 'GPS lost' : g.status === 'denied' ? 'Location blocked' : g.status === 'none' ? 'No location here' : 'GPS off';
-const gpsLong = g => g.status === 'ok' ? `GPS ready, accurate to ${Math.round(g.acc)} m.`
+const gpsSource = () => Geo.src === 'the GPS chip' ? ' Speed is measured by the GPS chip itself, which is more exact than the position.' : Geo.src === 'positions' ? ' Speed is worked out from positions: give it a few seconds to settle.' : '';
+const gpsLong = g => g.status === 'ok' ? `GPS ready. Position within ${Math.round(g.acc)} m${g.acc <= 10 ? ', close to the best a phone gives' : ''}.${Demo.on ? '' : gpsSource()}`
   : g.status === 'weak' ? `Weak signal, accurate to ${Math.round(g.acc)} m. It improves outdoors under open sky.`
   : g.status === 'asking' ? 'Finding your position…'
   : g.status === 'slow' ? 'Still no position. GPS needs a clear view of the sky. If this never changes, Bluefy may not pass location on to pages.'
@@ -1409,8 +1426,9 @@ function slotView(slot) {
     case 'connecting': return { tone: 'busy', icon: 'spin', label: 'Connecting', hint: '' };
     case 'lost':
       if (!slot.seeking) return { tone: 'busy', icon: 'spin', label: 'Signal lost, reconnecting', hint: '' };
-      if (performance.now() - slot.seekAt < 15000) return { tone: 'busy', icon: 'spin', label: 'Looking for it', hint: '', action: performance.now() - slot.seekAt > 5000 ? 'Pick' : '' };
-      return { tone: 'warn', icon: 'alert', label: 'Not found yet, still looking', hint: d.wake, action: 'Pick' };
+      { const age = performance.now() - slot.seekAt, why = slot.err ? 'Last try stopped while ' + slot.err : '';
+        if (age < 15000) return { tone: 'busy', icon: 'spin', label: 'Looking for it', hint: age > 4000 ? why : '', action: age > 4000 ? 'Pick' : '' };
+        return { tone: 'warn', icon: 'alert', label: 'Not reconnecting by itself', hint: why ? `${why}. ${d.wake}` : d.wake, action: 'Pick' }; }
     case 'refused': return { tone: 'warn', icon: 'alert', label: 'Found, but it would not connect', hint: d.refused, action: 'Try again' };
     case 'missing': return { tone: 'warn', icon: 'alert', label: 'Not found', hint: d.missing, action: 'Search' };
     default: return { tone: d.deviceStep ? 'warn' : 'off', icon: d.deviceStep ? 'alert' : 'ring', label: 'Not connected', hint: d.need, action: 'Connect' };
@@ -1437,7 +1455,7 @@ function sensorSheet(slot) {
       btns.appendChild(sheetBtn('Show every Bluetooth device', 'quiet', () => { closeSheet(); pick(slot, 'all').catch(() => {}); }));
     }
     root.appendChild(btns);
-    if (slot.err && !on && !Demo.on) { const p = mk('p', 'sh-lock', 'Last attempt stopped while ' + slot.err + '.'); root.appendChild(p); }
+    if (slot.err && (!on || slot.seeking) && !Demo.on) { const p = mk('p', 'sh-lock', 'Last attempt stopped while ' + slot.err + '.'); root.appendChild(p); }
     if (slot.saved && slot.saved.name && !Demo.on) {
       const p = mk('p', 'sh-lock'); p.append('Locked to ', mk('b', '', slot.saved.name), '. If you pick a different one, the app asks before using it.'); root.appendChild(p);
       const f = sheetBtn('Forget this sensor', 'quiet', () => { closeSheet(); disconnect(slot); try { if (slot.device && slot.device.forget) slot.device.forget(); } catch (e) {} detach(slot); slot.saved = null; saveSensors(); }); f.style.marginTop = '4px'; root.appendChild(f);
@@ -1746,6 +1764,7 @@ function launchConnect() {
       const slot = slots.find(s => !s.device && sameSensor(s, dev));
       if (!slot) return;
       attach(slot, dev); slot.seeking = true; slot.seekAt = performance.now(); setState(slot, 'lost');
+      log(slot, `remembered by the browser as ${dev.name || 'unnamed'} (${String(dev.id || 'no id').slice(0, 8)}), ${typeof dev.watchAdvertisements === 'function' ? 'can' : 'cannot'} listen for it`);
       // If the browser can listen for the sensor, wait to hear it (it then connects at once); otherwise try straight away. Either way, keep trying.
       const listening = watchAds(slot);
       slot.timer = setTimeout(() => { if (slot.device === dev && slot.state === 'lost') connect(slot, true); }, listening ? 5000 : 0);
@@ -1754,6 +1773,7 @@ function launchConnect() {
     log(null, `the browser remembers ${(list || []).length} device(s); reopening ${n}${n ? (slots.some(s => s.adDev) ? ', listening for them first' : ', it cannot listen for them') : ''}`);
   }).catch(e => { log(null, `could not list remembered devices (${errText(e)})`); });
   Promise.race([known, new Promise(r => setTimeout(r, 1500))]).then(() => { if (CFG.autoConnect && !Demo.on) connectAll(true); });
+  setTimeout(escalate, 6000);
 }
 launchConnect();
 renderSetup();
@@ -1764,7 +1784,7 @@ if (pending && !Demo.on) { show(D.resume, true); setText(D.resumeTitle, (pending
 /* The device list is a native sheet over the page. If the page gets a touch while a slot still says "pick it",
    the list was closed without an answer: stop waiting. */
 document.addEventListener('pointerdown', () => {
-  slots.forEach(s => { if (s.state === 'choosing' && performance.now() - s.chooseAt > 1500) { setState(s, s.device && s.ever ? 'lost' : s.autoPick ? 'idle' : 'missing'); if (s.state === 'lost') scheduleRetry(s); } });
+  slots.forEach(s => { if (s.state === 'choosing' && performance.now() - s.chooseAt > 1500) { setState(s, s.device && (s.ever || s.seeking) ? 'lost' : s.autoPick ? 'idle' : 'missing'); if (s.state === 'lost') scheduleRetry(s); } });
 }, true);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { if (W && !W.ended) Wake.on(); slots.forEach(s => { if (s.state === 'lost') retryNow(s); }); }
