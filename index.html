@@ -459,13 +459,27 @@ const lerp = (a, b, u) => a + (b - a) * clamp(u, 0, 1);
 const fmt = s => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
 const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${n >> 8 & 255},${n & 255},${a})`; };
 const now = () => Date.now();
-const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error(what + ' timed out')), ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
+const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => { const e = new Error(what + ' timed out'); e.timedOut = true; rej(e); }, ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
 
-const BUILD = 6;   // shown in Settings, so it is clear which version a phone is running
+const BUILD = 7;   // shown in Settings, so it is clear which version a phone is running
 /* A short connection log, shown in Settings, so a failure on real hardware can be read off the screen. */
 const LOG = [], T0 = Date.now();
 function log(who, msg) { LOG.push(`${((Date.now() - T0) / 1000).toFixed(1)}s  ${who ? who.def.name : 'App'}: ${msg}`); if (LOG.length > 160) LOG.shift(); }
-const errText = e => (e ? `${e.name || 'Error'}${e.message ? ': ' + e.message : ''}` : 'unknown error').slice(0, 150);
+/* Whatever a browser rejects with, say as much of it as there is: some reject with a bare Error, a string or a plain object. */
+function errText(e) {
+  if (e == null || e === '') return 'no reason given';
+  if (typeof e !== 'object' && typeof e !== 'function') return String(e).slice(0, 150);
+  const name = e.name && e.name !== 'Error' ? String(e.name) : '', msg = e.message ? String(e.message) : '';
+  let s = name + (name && msg ? ': ' : '') + msg;
+  if (!msg) {
+    let more = ''; try { more = JSON.stringify(e) || ''; } catch (_) {}
+    if (more === '{}' || more === 'null') { try { more = String(e); } catch (_) { more = ''; } }
+    if (/^\[object |^Error$/.test(more) || more === '{}') more = '';
+    if (e.code != null && !more.includes(String(e.code))) more += (more ? ' ' : '') + 'code ' + e.code;
+    s += (s && more ? ' ' : '') + more;
+  }
+  return (s || 'no reason given').slice(0, 150);
+}
 /* Inside someone else's page (a preview frame) the browser cannot hand a chosen sensor back to this page. */
 let FRAMED = false; try { FRAMED = window.top !== window.self; } catch (e) { FRAMED = true; }
 
@@ -603,7 +617,7 @@ const SENSORS = [
 ];
 const savedSensors = store.get('quorum.sensors', {});
 const slots = SENSORS.map((def, i) => ({ def, i, device: null, ch: null, state: 'idle', hr: null, at: 0, since: 0, contact: null, battery: null,
-  saved: savedSensors[def.id] || null, want: false, ever: false, retry: 0, kicks: 0, pickSeq: 0, chooseAt: 0, autoPick: false, seeking: false, seekAt: 0, err: '', fails: 0, gotData: false, attempt: 0, flight: null, heardAt: 0, adDev: null, adAbort: null, onAd: null, noAds: null, nudge: 0, timer: 0, onDisc: null, onHr: null }));
+  saved: savedSensors[def.id] || null, want: false, ever: false, retry: 0, kicks: 0, pickSeq: 0, chooseAt: 0, autoPick: false, seeking: false, seekAt: 0, err: '', fails: 0, gotData: false, attempt: 0, flight: null, heardAt: 0, adDev: null, adAbort: null, onAd: null, noAds: null, adAt: 0, adTry: 0, triedAt: 0, heardFails: 0, tries: 0, timer: 0, onDisc: null, onHr: null }));
 const saveSensors = () => { const o = {}; slots.forEach(s => { if (s.saved) o[s.def.id] = s.saved; }); store.set('quorum.sensors', o); };
 
 const STALE_MS = 5000;
@@ -634,31 +648,37 @@ function dropChar(slot) {
 function stopAds(slot) {
   if (slot.adAbort) { try { slot.adAbort.abort(); } catch (e) {} }
   if (slot.adDev && slot.onAd) { try { slot.adDev.removeEventListener('advertisementreceived', slot.onAd); } catch (e) {} }
-  clearTimeout(slot.nudge); slot.nudge = 0;
   slot.adAbort = null; slot.adDev = null; slot.onAd = null;
 }
-/* A sensor the browser only remembers can usually be opened once it has been heard advertising.
-   Listen for it and open the link the moment it is heard. Not every browser offers this. */
-function watchAds(slot) {
+const canListen = slot => !!slot.device && typeof slot.device.watchAdvertisements === 'function' && slot.noAds !== slot.device;
+const heardLately = (slot, ms) => !!slot.heardAt && performance.now() - slot.heardAt < ms;
+/* After a reload the browser only hands back a remembered sensor; the phone has to find it in the air again before
+   the link will open. Asking the browser to listen starts that search. Where the browser also reports what it hears,
+   the link is opened the moment the sensor is heard. fresh = start the search over (opening a link can end it). */
+function watchAds(slot, fresh) {
   const dev = slot.device;
-  if (!dev || typeof dev.watchAdvertisements !== 'function' || slot.noAds === dev) return false;
-  if (slot.adDev === dev) return true;
+  if (!canListen(slot)) return false;
+  if (slot.adDev === dev && !fresh) return true;
   stopAds(slot);
-  slot.adDev = dev;
+  slot.adDev = dev; slot.adAt = performance.now();
   slot.onAd = () => {
     if (slot.device !== dev) return;
-    if (!slot.heardAt) log(slot, 'heard it advertising');
-    slot.heardAt = performance.now();
-    if (slot.state !== 'lost') return;
-    if (slot.flight !== dev) { clearTimeout(slot.timer); connect(slot, true); return; }
-    if (!slot.nudge) slot.nudge = setTimeout(() => {
-      slot.nudge = 0;
-      if (slot.device !== dev || slot.state !== 'lost' || slot.flight !== dev) return;
-      try { dev.gatt.disconnect(); } catch (e) {}
-      slot.attempt++; slot.flight = null; connect(slot, true);
-    }, 2500);
+    const now = performance.now();
+    if (!slot.heardAt) log(slot, `heard it advertising${slot.seeking ? ' ' + ((now - slot.seekAt) / 1000).toFixed(1) + 's after launch' : ''}`);
+    slot.heardAt = now;
+    if (slot.state !== 'lost' || slot.flight === dev || slot.adTry) return;
+    // Heard: open the link now, or, if a try was turned down a moment ago, after a pause that doubles with every refusal.
+    const wait = Math.max(0, slot.triedAt + Math.min(8000, 400 * Math.pow(2, slot.heardFails)) - now);
+    slot.adTry = setTimeout(() => {
+      slot.adTry = 0;
+      if (slot.device === dev && slot.state === 'lost' && !slot.flight) { clearTimeout(slot.timer); connect(slot, true); }
+    }, (slot.triedAt ? wait : 0) + slot.i * 120);
   };
-  const fail = e => { if (slot.adDev !== dev || (e && e.name === 'AbortError')) return; log(slot, `cannot listen for its advertisements (${errText(e)})`); slot.noAds = dev; stopAds(slot); };
+  const fail = e => {
+    if (slot.adDev !== dev || (e && e.name === 'AbortError')) return;
+    log(slot, `cannot listen for its advertisements (${errText(e)})`); slot.noAds = dev; stopAds(slot);
+    if (slot.state === 'lost' && slot.seeking && !slot.flight && !slot.tries) { clearTimeout(slot.timer); connect(slot, true); }   // nothing to wait for: try directly
+  };
   try {
     dev.addEventListener('advertisementreceived', slot.onAd);
     slot.adAbort = window.AbortController ? new AbortController() : null;
@@ -667,9 +687,19 @@ function watchAds(slot) {
     return true;
   } catch (e) { fail(e); return false; }
 }
+/* Opening a link, or ending one sensor's search, may end the phone's search for the others: start it again for every
+   remembered sensor that is still missing. */
+let rearmTimer = 0;
+function rearmSoon() {
+  clearTimeout(rearmTimer);
+  rearmTimer = setTimeout(() => {
+    if (slots.some(s => s.flight && s.seeking)) { rearmSoon(); return; }   // not in the middle of a round of links: a new search may drop what the last one found
+    slots.forEach(s => { if (s.state === 'lost' && s.seeking && s.device && !s.flight) watchAds(s, true); });
+  }, 250);
+}
 function detach(slot) {
   clearTimeout(slot.timer); dropChar(slot); stopAds(slot);
-  slot.attempt++; slot.flight = null; slot.heardAt = 0; slot.noAds = null;
+  slot.attempt++; slot.flight = null; slot.heardAt = 0; slot.noAds = null; slot.triedAt = 0; slot.heardFails = 0; slot.tries = 0; clearTimeout(slot.adTry); slot.adTry = 0;
   if (slot.device) {
     try { slot.device.removeEventListener('gattserverdisconnected', slot.onDisc); } catch (e) {}
     try { if (slot.device.gatt && slot.device.gatt.connected) slot.device.gatt.disconnect(); } catch (e) {}
@@ -701,16 +731,34 @@ async function readBattery(slot, server, dev) {
 }
 /* Open the link and subscribe to heart rate. retrying=true keeps trying quietly.
    Each call is one attempt; a newer attempt or a newly picked device makes an older one stand down. */
+/* Remembered sensors are reopened side by side. If links asked for together are turned down, the rest of this visit
+   opens them one at a time instead (oneAtATime). gateTurn resolves, when it is the caller's turn, with a function that
+   hands the turn on; a turn also ends by itself after holdMs. */
+let oneAtATime = false, quietOpening = 0, quietStarts = 0, clashes = 0;
+let gateTail = Promise.resolve();
+function gateTurn(holdMs) {
+  let release; const held = new Promise(r => { release = r; });
+  const turn = gateTail.then(() => { setTimeout(release, holdMs); return release; });
+  gateTail = gateTail.then(() => held);
+  return turn;
+}
 async function connect(slot, retrying) {
   const dev = slot.device; if (!dev || slot.flight === dev) return false;
   const my = ++slot.attempt, live = () => slot.device === dev && slot.attempt === my;
-  slot.flight = dev; slot.want = true;
+  slot.flight = dev; slot.want = true; slot.tries++;
   setState(slot, retrying ? 'lost' : 'connecting');
   if (retrying) watchAds(slot);
-  let stage = 'opening the link';
+  let stage = 'opening the link', release = null;
   try {
-    const heard = slot.heardAt && performance.now() - slot.heardAt < 10000;
-    const server = await withTimeout(dev.gatt.connect(), retrying && !heard ? 9000 : 20000, 'Connecting');
+    const quiet = retrying && slot.seeking;
+    if (quiet && oneAtATime) { release = await gateTurn(3000); if (!live()) return false; }
+    var heard = heardLately(slot, 10000), together = false;
+    let server;
+    if (quiet) { together = quietOpening > 0; quietOpening++; quietStarts++; }
+    const startedAt = quietStarts;
+    try { server = await withTimeout(dev.gatt.connect(), retrying && !heard ? 9000 : quiet ? 12000 : 20000, 'Connecting'); }
+    finally { if (quiet) { quietOpening--; together = together || quietStarts !== startedAt; } }
+    if (release) { release(); release = null; }
     if (!live()) return false;
     stage = 'finding the heart rate service';
     const svc = await withTimeout(server.getPrimaryService(U_HR), 12000, 'Heart rate service');
@@ -725,7 +773,8 @@ async function connect(slot, retrying) {
     stage = 'subscribing to heart rate';
     await withTimeout(ch.startNotifications(), 12000, 'Subscribing');
     if (!live()) return false;
-    slot.retry = 0; slot.ever = true; slot.hr = null; slot.at = 0; slot.seeking = false; slot.err = ''; slot.fails = 0; slot.gotData = false;
+    if (slot.seeking) log(slot, `came back by itself ${((performance.now() - slot.seekAt) / 1000).toFixed(1)}s after launch, on try ${slot.tries}${slot.heardAt ? ', after being heard' : ', without being heard first'}`);
+    slot.retry = 0; slot.ever = true; slot.hr = null; slot.at = 0; slot.seeking = false; slot.err = ''; slot.fails = 0; slot.heardFails = 0; slot.gotData = false;
     slot.saved = { name: dev.name || (slot.saved && slot.saved.name) || '', id: dev.id || '' }; saveSensors();
     stopAds(slot);
     setState(slot, 'connected');
@@ -734,14 +783,24 @@ async function connect(slot, retrying) {
     return true;
   } catch (e) {
     if (!live()) return false;
+    slot.triedAt = performance.now();
+    const refusedAtOnce = stage === 'opening the link' && !(e && e.timedOut);
     slot.err = `${stage}: ${errText(e)}`; slot.fails++;
-    if (slot.fails <= 3 || slot.fails % 20 === 0) log(slot, `attempt ${slot.fails} failed while ${slot.err}`);
-    try { dev.gatt.disconnect(); } catch (_) {}
+    // One refusal among links opened together may just be a sensor that is switched off. A sensor that had been heard, or a second such refusal, points at the links getting in each other's way.
+    if (refusedAtOnce && together && !oneAtATime && (heard || ++clashes >= 2)) { oneAtATime = true; log(null, 'links asked for together were turned down: opening them one at a time from now on'); }
+    else if (refusedAtOnce && heard) slot.heardFails++;
+    if (slot.fails <= 4 || slot.fails % 20 === 0) log(slot, `try ${slot.tries} stopped while ${slot.err} (${heard ? 'heard ' + ((performance.now() - slot.heardAt) / 1000).toFixed(1) + 's before' : slot.heardAt ? 'not heard lately' : 'not heard yet'})`);
+    // A remembered sensor the browser turned down has no link to close, and is best left alone. Everything else is closed as before.
+    if (!(retrying && slot.seeking && refusedAtOnce) || (dev.gatt && dev.gatt.connected)) { try { dev.gatt.disconnect(); } catch (_) {} }
     dropChar(slot);
-    if (slot.want && (retrying || slot.ever)) { setState(slot, 'lost'); watchAds(slot); scheduleRetry(slot); }
+    if (slot.want && (retrying || slot.ever)) { setState(slot, 'lost'); scheduleRetry(slot); }
     else setState(slot, 'refused');
     return false;
-  } finally { if (slot.attempt === my) slot.flight = null; }
+  } finally {
+    if (release) release();
+    if (slot.attempt === my) { slot.flight = null; slot.triedAt = performance.now(); }
+    rearmSoon();
+  }
 }
 function onDisconnected(slot, dev) {
   if (slot.device !== dev) return;
@@ -751,10 +810,32 @@ function onDisconnected(slot, dev) {
 }
 function scheduleRetry(slot) {
   clearTimeout(slot.timer);
-  const justHeard = slot.heardAt && performance.now() - slot.heardAt < 6000 && slot.retry < 3;
-  const cap = slot.seeking && performance.now() - slot.seekAt < 60000 ? 2500 : 8000;      // brisk for the first minute after launch
-  const delay = justHeard ? 250 : Math.min(cap, 700 * Math.pow(2, Math.min(slot.retry, 4))); slot.retry++;
-  slot.timer = setTimeout(() => { if (slot.want && slot.device && slot.state === 'lost') connect(slot, true); }, delay);
+  let delay;
+  if (slot.seeking) {
+    // Remembered after a reload: a sensor that is heard again is tried at once (see watchAds). This is the direct try for one
+    // that is not, spaced so the phone has time to find it in between.
+    delay = [3000, 5000][slot.retry] || 8000;
+  } else {
+    const justHeard = heardLately(slot, 6000) && slot.retry < 3;
+    delay = justHeard ? 250 : Math.min(8000, 700 * Math.pow(2, Math.min(slot.retry, 4)));
+  }
+  slot.retry++;
+  slot.timer = setTimeout(() => { if (slot.want && slot.device && slot.state === 'lost') quietTry(slot); }, delay);
+}
+/* One quiet try. From the third failed try on, first ask the browser for the remembered sensor again, in case it hands out a new handle. */
+async function quietTry(slot) {
+  if (slot.seeking && slot.fails >= 2 && !heardLately(slot, 10000) && BT && BT.getDevices) {
+    const old = slot.device; let list = null;
+    try { list = await withTimeout(BT.getDevices(), 3000, 'Listing remembered devices'); } catch (e) {}
+    if (slot.device !== old || slot.state !== 'lost' || slot.flight || !slot.want) return;
+    const dev = (list || []).find(d => sameSensor(slot, d));
+    if (dev && dev !== old) {
+      const keep = { seekAt: slot.seekAt, err: slot.err, fails: slot.fails, tries: slot.tries, retry: slot.retry };
+      attach(slot, dev); Object.assign(slot, keep, { seeking: true }); setState(slot, 'lost');
+      log(slot, 'the browser handed over a new handle for it');
+    }
+  }
+  connect(slot, true);
 }
 /* iOS sometimes stops delivering notifications without reporting a disconnect: re-open links that go quiet. */
 function watchdog() {
@@ -843,7 +924,8 @@ async function reopenRemembered() {
   let list; try { list = await withTimeout(BT.getDevices(), 3000, 'Listing remembered devices'); } catch (e) { return; }
   (list || []).forEach(dev => {
     const slot = slots.find(s => s.state === 'lost' && s.seeking && sameSensor(s, dev)); if (!slot) return;
-    if (slot.device !== dev) { attach(slot, dev); slot.seeking = true; } else { try { dev.gatt.disconnect(); } catch (e) {} slot.attempt++; slot.flight = null; }
+    if (slot.flight === dev) { slot.attempt++; slot.flight = null; }   // the tap's own try takes over from a quiet one that is still running
+    if (slot.device !== dev) { const keep = { seekAt: slot.seekAt, err: slot.err, fails: slot.fails, tries: slot.tries }; attach(slot, dev); Object.assign(slot, keep, { seeking: true }); setState(slot, 'lost'); }
     clearTimeout(slot.timer); connect(slot, true);
   });
 }
@@ -858,7 +940,7 @@ async function connectAll(auto) {
       triedInTap = true;
       log(null, 'tap: trying the remembered sensors once more before opening any list');
       await reopenRemembered();
-      for (const t = performance.now(); performance.now() - t < 4500 && seekers().length && id === chainId;) await sleep(150);
+      for (const t = performance.now(); performance.now() - t < 3500 && seekers().some(s => s.flight) && id === chainId;) await sleep(100);
       if (id !== chainId) return;
     }
     const waiting = s => ['idle', 'missing', 'refused'].includes(s.state) || (s.state === 'lost' && s.seeking);
@@ -1426,9 +1508,11 @@ function slotView(slot) {
     case 'connecting': return { tone: 'busy', icon: 'spin', label: 'Connecting', hint: '' };
     case 'lost':
       if (!slot.seeking) return { tone: 'busy', icon: 'spin', label: 'Signal lost, reconnecting', hint: '' };
-      { const age = performance.now() - slot.seekAt, why = slot.err ? 'Last try stopped while ' + slot.err : '';
-        if (age < 15000) return { tone: 'busy', icon: 'spin', label: 'Looking for it', hint: age > 4000 ? why : '', action: age > 4000 ? 'Pick' : '' };
-        return { tone: 'warn', icon: 'alert', label: 'Not reconnecting by itself', hint: why ? `${why}. ${d.wake}` : d.wake, action: 'Pick' }; }
+      { const age = performance.now() - slot.seekAt, why = slot.err ? 'Last try stopped while ' + slot.err : '', heard = heardLately(slot, 15000);
+        if (heard && slot.heardFails >= 3) return { tone: 'warn', icon: 'alert', label: 'Found, but it will not reopen by itself', hint: `${why}. Pick it from the list`, action: 'Pick' };
+        if (heard) return { tone: 'busy', icon: 'spin', label: 'Found it, connecting', hint: '', action: age > 6000 ? 'Pick' : '' };
+        if (age < 12000) return { tone: 'busy', icon: 'spin', label: 'Looking for it', hint: age > 6000 ? why : '', action: age > 6000 ? 'Pick' : '' };
+        return { tone: 'warn', icon: 'alert', label: canListen(slot) ? 'Not found yet, still looking' : 'Not reconnecting by itself', hint: why ? `${d.wake}. ${why}` : d.wake, action: 'Pick' }; }
     case 'refused': return { tone: 'warn', icon: 'alert', label: 'Found, but it would not connect', hint: d.refused, action: 'Try again' };
     case 'missing': return { tone: 'warn', icon: 'alert', label: 'Not found', hint: d.missing, action: 'Search' };
     default: return { tone: d.deviceStep ? 'warn' : 'off', icon: d.deviceStep ? 'alert' : 'ring', label: 'Not connected', hint: d.need, action: 'Connect' };
@@ -1764,13 +1848,15 @@ function launchConnect() {
       const slot = slots.find(s => !s.device && sameSensor(s, dev));
       if (!slot) return;
       attach(slot, dev); slot.seeking = true; slot.seekAt = performance.now(); setState(slot, 'lost');
-      log(slot, `remembered by the browser as ${dev.name || 'unnamed'} (${String(dev.id || 'no id').slice(0, 8)}), ${typeof dev.watchAdvertisements === 'function' ? 'can' : 'cannot'} listen for it`);
-      // Start opening the link straight away and, where the browser can, listen for the sensor too. Keep trying until it is there.
-      watchAds(slot);
-      connect(slot, true);
+      // Listen first: that sets the phone searching for the sensor, and the link opens the moment it is heard. A direct try
+      // follows after 5 s whether or not anything was reported. A direct try before the phone has found the sensor is turned
+      // down, and on the phone it stopped the sensor from coming back at all (build 6), so there is none at launch.
+      const listening = watchAds(slot);
+      log(slot, `remembered by the browser as ${dev.name || 'unnamed'} (${String(dev.id || 'no id').slice(0, 8)}), ${listening ? 'listening for it' : 'cannot listen for it, trying directly'}`);
+      slot.timer = setTimeout(() => { if (slot.device === dev && slot.state === 'lost' && !slot.flight) connect(slot, true); }, listening ? 5000 + slot.i * 150 : slot.i * 100);
     });
     const n = slots.filter(s => s.seeking).length;
-    log(null, `the browser remembers ${(list || []).length} device(s); reopening ${n}${n ? (slots.some(s => s.adDev) ? ', and listening for them' : ', it cannot listen for them') : ''}`);
+    log(null, `the browser remembers ${(list || []).length} device(s); reopening ${n}${n ? (slots.some(s => s.adDev) ? ', listening for them first' : ', it cannot listen for them') : ''}`);
   }).catch(e => { log(null, `could not list remembered devices (${errText(e)})`); });
   Promise.race([known, new Promise(r => setTimeout(r, 1500))]).then(() => { if (CFG.autoConnect && !Demo.on) connectAll(true); });
 }
@@ -1786,7 +1872,7 @@ document.addEventListener('pointerdown', () => {
   slots.forEach(s => { if (s.state === 'choosing' && performance.now() - s.chooseAt > 1500) { setState(s, s.device && (s.ever || s.seeking) ? 'lost' : s.autoPick ? 'idle' : 'missing'); if (s.state === 'lost') scheduleRetry(s); } });
 }, true);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { if (W && !W.ended) Wake.on(); slots.forEach(s => { if (s.state === 'lost') retryNow(s); }); }
+  if (document.visibilityState === 'visible') { if (W && !W.ended) Wake.on(); slots.forEach(s => { if (s.state !== 'lost') return; if (s.seeking && canListen(s)) { if (!s.flight) watchAds(s, true); } else retryNow(s); }); }
   else saveSession();
 });
 window.addEventListener('pagehide', saveSession);
