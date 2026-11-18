@@ -649,7 +649,7 @@ const HAS_BT = !!(BT && BT.requestDevice);
 const U_HR = '0000180d-0000-1000-8000-00805f9b34fb', U_HR_MEAS = '00002a37-0000-1000-8000-00805f9b34fb';
 const U_BAT = '0000180f-0000-1000-8000-00805f9b34fb', U_BAT_LEVEL = '00002a19-0000-1000-8000-00805f9b34fb';
 const OPTIONAL = [U_HR, U_BAT];
-/* A renamed device (earbuds called "pbk2", say) advertises under its new name. The person can type that name in the
+/* A renamed device advertises under its new name. The person can type that name in the
    sensor's sheet; it is kept in this browser only. A device picked from a wider list is found by its name after that too. */
 const extraNames = store.get('quorum.names', {});
 function namesFor(slot) {
