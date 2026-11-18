@@ -461,7 +461,7 @@ const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${
 const now = () => Date.now();
 const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => { const e = new Error(what + ' timed out'); e.timedOut = true; rej(e); }, ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
 
-const BUILD = 10;   // shown in Settings, so it is clear which version a phone is running
+const BUILD = 11;   // shown in Settings, so it is clear which version a phone is running
 /* A short connection log, shown in Settings, so a failure on real hardware can be read off the screen. */
 const LOG = [], T0 = Date.now();
 function log(who, msg) { LOG.push(`${((Date.now() - T0) / 1000).toFixed(1)}s  ${who ? who.def.name : 'App'}: ${msg}`); if (LOG.length > 160) LOG.shift(); }
@@ -615,15 +615,15 @@ const SENSORS = [
     contact: 'Wet the electrodes and tighten the strap',
     steps: ['Put the strap on and press its button once to wake it.', 'Hold the button for 4 seconds. The LED flashes purple: pairing mode, open for 5 minutes.', 'Check the connection type. 3 green flashes every 5 s is open, which this app needs. 2 flashes is secure: double-press the button to switch.', 'Connect from here while the LED is still purple.'],
     note: 'It accepts 3 Bluetooth connections at once. These steps follow the HRM 600; older Garmin straps without a button only need to be worn.' },
-  { id: 'beats', name: 'Beats', full: 'Powerbeats Pro 2', color: '#4a710a', prefixes: ['Powerbeats', 'POWERBEATS'], deviceStep: true, numbered: true,
-    need: 'Needs heart rate sharing: double-press, then hold the b button',
-    missing: 'Not in the list? It shows under the name you gave the earbuds: type it in this sensor\'s sheet',
-    wake: 'Wear both earbuds, then double-press and hold the b button until the tone',
-    refused: 'It may be sharing with another device. Stop that, then double-press and hold the b button again',
-    nodata: 'Wear both earbuds. Heart rate stops while one is out',
-    contact: 'Wear both earbuds with a snug fit',
-    steps: ['Put both earbuds in. Heart rate stops while one is out.', 'Check once: iPhone Settings, tap Powerbeats Pro 2 near the top, and make sure Heart Rate Sensor is on.', 'Double-press, then hold the b button on either earbud until a tone plays. It is now sharing heart rate.', 'Pick it in the list. It shows under the name you gave the earbuds; if you renamed them, type that name below first.'],
-    note: 'While it shares heart rate this way, the iPhone cannot play audio to the earbuds (Apple). Reviewers found its heart rate links from iPhone apps less reliable than on Android.' }
+  { id: 'bridge', name: 'Bridge', full: 'ESP32 heart rate bridge', color: '#4a710a', prefixes: ['pb-hr', 'PB-HR'], deviceStep: false, numbered: true,
+    need: 'Power the bridge on',
+    missing: 'Not in the list? Check the bridge has power and is advertising. A different name can be typed in this sensor\'s sheet',
+    wake: 'Check the bridge has power and is advertising',
+    refused: 'It may be linked to another phone or app. Disconnect it there, or restart the bridge',
+    nodata: 'Connected, but no heart rate yet. Check the bridge is receiving from its source',
+    contact: 'The bridge reports no skin contact from its source',
+    steps: ['Power the ESP32 bridge on.', 'Make sure whatever it relays is sending heart rate to it.', 'Pick it in the list.'],
+    note: 'Any device that sends standard Bluetooth heart rate works here.' }
 ];
 const NS = SENSORS.length;
 const savedSensors = store.get('quorum.sensors', {});

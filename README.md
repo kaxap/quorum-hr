@@ -1,6 +1,6 @@
 # Quorum
 
-A single-page heart-rate app for the Bluefy browser on iOS. It reads five Bluetooth heart-rate sensors at once (Whoop, Coros arm band, Wahoo Trackr, Garmin strap, Powerbeats Pro 2) and shows their median, with a free workout mode and a guided 4×4 Norwegian interval mode.
+A single-page heart-rate app for the Bluefy browser on iOS. It reads five Bluetooth heart-rate sensors at once (Whoop, Coros arm band, Wahoo Trackr, Garmin strap, an ESP32 heart rate bridge) and shows their median, with a free workout mode and a guided 4×4 Norwegian interval mode.
 
 Open https://kaxap.github.io/quorum-hr/ in Bluefy.
 
@@ -9,4 +9,4 @@ Open https://kaxap.github.io/quorum-hr/ in Bluefy.
 - Speed and distance from the phone's GPS are optional: a switch on the start sheet of each workout, off by default. Positions stay on the phone.
 - Add `#demo` to the address to try it with simulated sensors.
 
-Current build: 10. The same number is shown at the bottom of the app's Settings.
+Current build: 11. The same number is shown at the bottom of the app's Settings.
