@@ -461,7 +461,7 @@ const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${
 const now = () => Date.now();
 const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => { const e = new Error(what + ' timed out'); e.timedOut = true; rej(e); }, ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
 
-const BUILD = 8;   // shown in Settings, so it is clear which version a phone is running
+const BUILD = 9;   // shown in Settings, so it is clear which version a phone is running
 /* A short connection log, shown in Settings, so a failure on real hardware can be read off the screen. */
 const LOG = [], T0 = Date.now();
 function log(who, msg) { LOG.push(`${((Date.now() - T0) / 1000).toFixed(1)}s  ${who ? who.def.name : 'App'}: ${msg}`); if (LOG.length > 160) LOG.shift(); }
@@ -616,12 +616,12 @@ const SENSORS = [
     note: 'It accepts 3 Bluetooth connections at once. These steps follow the HRM 600; older Garmin straps without a button only need to be worn.' },
   { id: 'beats', name: 'Beats', full: 'Powerbeats Pro 2', color: '#4a710a', prefixes: ['Powerbeats', 'POWERBEATS'], deviceStep: true, numbered: true,
     need: 'Needs heart rate sharing: double-press, then hold the b button',
-    missing: 'Not in the list? Wear both earbuds, then double-press and hold the b button until the tone',
+    missing: 'Not in the list? It shows under the name you gave the earbuds: type it in this sensor\'s sheet',
     wake: 'Wear both earbuds, then double-press and hold the b button until the tone',
     refused: 'It may be sharing with another device. Stop that, then double-press and hold the b button again',
     nodata: 'Wear both earbuds. Heart rate stops while one is out',
     contact: 'Wear both earbuds with a snug fit',
-    steps: ['Put both earbuds in. Heart rate stops while one is out.', 'Check once: iPhone Settings, tap Powerbeats Pro 2 near the top, and make sure Heart Rate Sensor is on.', 'Double-press, then hold the b button on either earbud until a tone plays. It is now sharing heart rate.', 'Pick Powerbeats HR in the list.'],
+    steps: ['Put both earbuds in. Heart rate stops while one is out.', 'Check once: iPhone Settings, tap Powerbeats Pro 2 near the top, and make sure Heart Rate Sensor is on.', 'Double-press, then hold the b button on either earbud until a tone plays. It is now sharing heart rate.', 'Pick it in the list. It shows under the name you gave the earbuds; if you renamed them, type that name below first.'],
     note: 'While it shares heart rate this way, the iPhone cannot play audio to the earbuds (Apple). Reviewers found its heart rate links from iPhone apps less reliable than on Android.' }
 ];
 const NS = SENSORS.length;
@@ -649,6 +649,14 @@ const HAS_BT = !!(BT && BT.requestDevice);
 const U_HR = '0000180d-0000-1000-8000-00805f9b34fb', U_HR_MEAS = '00002a37-0000-1000-8000-00805f9b34fb';
 const U_BAT = '0000180f-0000-1000-8000-00805f9b34fb', U_BAT_LEVEL = '00002a19-0000-1000-8000-00805f9b34fb';
 const OPTIONAL = [U_HR, U_BAT];
+/* A renamed device (earbuds called "pbk2", say) advertises under its new name. The person can type that name in the
+   sensor's sheet; it is kept in this browser only. A device picked from a wider list is found by its name after that too. */
+const extraNames = store.get('quorum.names', {});
+function namesFor(slot) {
+  const out = [], add = n => { n = String(n || '').trim(); if (n && !out.some(o => n.startsWith(o))) out.push(n); };
+  add(extraNames[slot.def.id]); if (slot.saved) add(slot.saved.name); slot.def.prefixes.forEach(add);
+  return out;
+}
 
 function setState(slot, st) { slot.state = st; if (st === 'connected') slot.since = performance.now(); }
 function dropChar(slot) {
@@ -886,10 +894,10 @@ async function pick(slot, how, auto) {
   const before = slot.state, seq = ++slot.pickSeq, t0 = performance.now();
   setState(slot, 'choosing'); slot.chooseAt = t0; slot.autoPick = !!auto;
   const opts = how === 'all' ? { acceptAllDevices: true, optionalServices: OPTIONAL }
-    : how === 'any' ? { filters: [{ services: [U_HR] }], optionalServices: OPTIONAL }
-    : { filters: slot.def.prefixes.map(p => ({ namePrefix: p })), optionalServices: OPTIONAL };
+    : how === 'any' ? { filters: [{ services: [U_HR] }].concat(namesFor(slot).filter(n => !slot.def.prefixes.includes(n)).map(n => ({ namePrefix: n }))), optionalServices: OPTIONAL }
+    : { filters: namesFor(slot).map(p => ({ namePrefix: p })), optionalServices: OPTIONAL };
   let dev;
-  log(slot, `asking the browser for a device (${how === 'own' ? 'names ' + slot.def.prefixes[0] + '…' : how === 'any' ? 'any heart-rate sensor' : 'every device'}${auto ? ', at launch' : ''})`);
+  log(slot, `asking the browser for a device (${how === 'own' ? 'names ' + namesFor(slot).join(', ') : how === 'any' ? 'any heart-rate sensor' : 'every device'}${auto ? ', at launch' : ''})`);
   try { dev = await BT.requestDevice(opts); }
   catch (e) {
     log(slot, `picker closed without a device after ${((performance.now() - t0) / 1000).toFixed(1)}s (${errText(e)})`);
@@ -1536,6 +1544,16 @@ function sensorSheet(slot) {
     root.appendChild(mk('div', 'sh-h', on ? 'If the reading drops out' : d.deviceStep ? 'Do this on the device first' : 'How it becomes visible'));
     const ol = mk('ol', 'sh-steps' + (d.numbered ? '' : ' plain')); d.steps.forEach(s => ol.appendChild(mk('li', '', s))); root.appendChild(ol);
     if (d.note) { const p = mk('p', 'sh-sub', d.note); p.style.margin = '-6px 0 14px'; root.appendChild(p); }
+    if (!on && !Demo.on) {
+      const f = mk('div', 'form'), lab = mk('label', '', 'Renamed it? Its name in Bluetooth lists'), inp = mk('input');
+      inp.type = 'text'; inp.autocapitalize = 'off'; inp.autocomplete = 'off'; inp.spellcheck = false; inp.maxLength = 30;
+      inp.placeholder = d.prefixes[0] + '…'; inp.value = extraNames[d.id] || '';
+      inp.addEventListener('change', () => {
+        const v = inp.value.trim(); if (v) extraNames[d.id] = v; else delete extraNames[d.id];
+        store.set('quorum.names', extraNames); log(slot, v ? `will also look for the name ${v}` : 'custom name cleared');
+      });
+      lab.appendChild(inp); f.appendChild(lab); f.style.margin = '0 0 14px'; f.style.display = 'block'; root.appendChild(f);
+    }
     const btns = mk('div', 'sh-btns');
     if (Demo.on) btns.appendChild(sheetBtn('Close', '', () => closeSheet()));
     else if (slot.state === 'lost' && slot.seeking) {

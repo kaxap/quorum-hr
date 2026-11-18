@@ -9,4 +9,4 @@ Open https://kaxap.github.io/quorum-hr/ in Bluefy.
 - Speed and distance from the phone's GPS are optional: a switch on the start sheet of each workout, off by default. Positions stay on the phone.
 - Add `#demo` to the address to try it with simulated sensors.
 
-Current build: 8. The same number is shown at the bottom of the app's Settings.
+Current build: 9. The same number is shown at the bottom of the app's Settings.
