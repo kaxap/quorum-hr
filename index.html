@@ -461,7 +461,7 @@ const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${
 const now = () => Date.now();
 const withTimeout = (p, ms, what) => new Promise((res, rej) => { const t = setTimeout(() => { const e = new Error(what + ' timed out'); e.timedOut = true; rej(e); }, ms); p.then(v => { clearTimeout(t); res(v); }, e => { clearTimeout(t); rej(e); }); });
 
-const BUILD = 11;   // shown in Settings, so it is clear which version a phone is running
+const BUILD = 12;   // shown in Settings, so it is clear which version a phone is running
 /* A short connection log, shown in Settings, so a failure on real hardware can be read off the screen. */
 const LOG = [], T0 = Date.now();
 function log(who, msg) { LOG.push(`${((Date.now() - T0) / 1000).toFixed(1)}s  ${who ? who.def.name : 'App'}: ${msg}`); if (LOG.length > 160) LOG.shift(); }
@@ -615,7 +615,7 @@ const SENSORS = [
     contact: 'Wet the electrodes and tighten the strap',
     steps: ['Put the strap on and press its button once to wake it.', 'Hold the button for 4 seconds. The LED flashes purple: pairing mode, open for 5 minutes.', 'Check the connection type. 3 green flashes every 5 s is open, which this app needs. 2 flashes is secure: double-press the button to switch.', 'Connect from here while the LED is still purple.'],
     note: 'It accepts 3 Bluetooth connections at once. These steps follow the HRM 600; older Garmin straps without a button only need to be worn.' },
-  { id: 'bridge', name: 'Bridge', full: 'ESP32 heart rate bridge', color: '#4a710a', prefixes: ['pb-hr', 'PB-HR'], deviceStep: false, numbered: true,
+  { id: 'bridge', name: 'Bridge', full: 'ESP32 heart rate bridge', batteryOf: 'Powerbeats', color: '#4a710a', prefixes: ['pb-hr', 'PB-HR'], deviceStep: false, numbered: true,
     need: 'Power the bridge on',
     missing: 'Not in the list? Check the bridge has power and is advertising. A different name can be typed in this sensor\'s sheet',
     wake: 'Check the bridge has power and is advertising',
@@ -627,7 +627,7 @@ const SENSORS = [
 ];
 const NS = SENSORS.length;
 const savedSensors = store.get('quorum.sensors', {});
-const slots = SENSORS.map((def, i) => ({ def, i, device: null, ch: null, state: 'idle', hr: null, at: 0, since: 0, contact: null, battery: null,
+const slots = SENSORS.map((def, i) => ({ def, i, device: null, ch: null, state: 'idle', hr: null, at: 0, since: 0, contact: null, battery: null, batt: [], battTimer: 0, battWarned: 101,
   saved: savedSensors[def.id] || null, want: false, ever: false, retry: 0, kicks: 0, pickSeq: 0, chooseAt: 0, autoPick: false, seeking: false, seekAt: 0, err: '', fails: 0, gotData: false, attempt: 0, flight: null, heardAt: 0, adDev: null, adAbort: null, onAd: null, noAds: null, adAt: 0, adTry: 0, triedAt: 0, heardFails: 0, tries: 0, timer: 0, onDisc: null, onHr: null }));
 const saveSensors = () => { const o = {}; slots.forEach(s => { if (s.saved) o[s.def.id] = s.saved; }); store.set('quorum.sensors', o); };
 
@@ -723,7 +723,7 @@ function detach(slot) {
     try { slot.device.removeEventListener('gattserverdisconnected', slot.onDisc); } catch (e) {}
     try { if (slot.device.gatt && slot.device.gatt.connected) slot.device.gatt.disconnect(); } catch (e) {}
   }
-  slot.device = null; slot.onDisc = null; slot.hr = null; slot.ever = false; slot.retry = 0; slot.kicks = 0; slot.battery = null; slot.contact = null;
+  slot.device = null; slot.onDisc = null; slot.hr = null; slot.ever = false; slot.retry = 0; slot.kicks = 0; slot.battery = null; slot.batt = []; clearInterval(slot.battTimer); slot.battTimer = 0; slot.contact = null;
 }
 function attach(slot, dev) {
   detach(slot);
@@ -740,13 +740,62 @@ function onHrValue(slot, dv) {
     if (!slot.gotData) { slot.gotData = true; log(slot, `first reading ${slot.hr} bpm`); }
   } catch (e) {}
 }
+/* Battery: every standard battery level the device offers (a bridge may pass on its source's battery, and earbuds can
+   report one per earbud), kept current by notifications where offered and by reading again every minute. */
+const U_DESC_USER = '00002901-0000-1000-8000-00805f9b34fb';
 async function readBattery(slot, server, dev) {
+  const mine = () => slot.device === dev && slot.state === 'connected';
+  let chars = [];
   try {
-    const s = await withTimeout(server.getPrimaryService(U_BAT), 6000, 'battery');
-    const c = await withTimeout(s.getCharacteristic(U_BAT_LEVEL), 6000, 'battery');
-    const v = await withTimeout(c.readValue(), 6000, 'battery');
-    if (slot.device === dev) slot.battery = v.getUint8(0);
-  } catch (e) {}
+    let svcs = [];
+    try { svcs = await withTimeout(server.getPrimaryServices(U_BAT), 6000, 'battery'); }
+    catch (e) { svcs = [await withTimeout(server.getPrimaryService(U_BAT), 6000, 'battery')]; }
+    for (const sv of svcs) {
+      try { chars = chars.concat(await withTimeout(sv.getCharacteristics(U_BAT_LEVEL), 6000, 'battery')); }
+      catch (e) { try { chars.push(await withTimeout(sv.getCharacteristic(U_BAT_LEVEL), 6000, 'battery')); } catch (_) {} }
+    }
+  } catch (e) { if (slot.def.batteryOf) log(slot, `no battery level offered (${errText(e)})`); return; }
+  if (!chars.length || !mine()) return;
+  const parts = chars.map(() => ({ label: '', pct: null }));
+  const take = (k, view) => {
+    if (slot.device !== dev || !view || view.byteLength < 1) return;
+    const v = view.getUint8(0); parts[k].pct = v <= 100 ? v : null;
+    slot.batt = parts.filter(x => x.pct != null);
+    slot.battery = slot.batt.length ? Math.min(...slot.batt.map(x => x.pct)) : null;
+    batteryCheck(slot);
+  };
+  for (let k = 0; k < chars.length; k++) {
+    const c = chars[k];
+    try { const dsc = await withTimeout(c.getDescriptor(U_DESC_USER), 3000, 'battery name'); parts[k].label = new TextDecoder().decode(await withTimeout(dsc.readValue(), 3000, 'battery name')).replace(/\0/g, '').trim().slice(0, 16); } catch (e) {}
+    try { take(k, await withTimeout(c.readValue(), 6000, 'battery')); } catch (e) {}
+    let notifies = false;
+    if (c.properties && c.properties.notify) {
+      try { c.addEventListener('characteristicvaluechanged', ev => take(k, ev.target.value)); await withTimeout(c.startNotifications(), 6000, 'battery'); notifies = true; } catch (e) {}
+    }
+    parts[k].notifies = notifies;
+  }
+  if (!mine()) return;
+  log(slot, `battery ${batteryText(slot) || 'not reported yet'} (${chars.length} level${chars.length > 1 ? 's' : ''}, ${parts.some(x => x.notifies) ? 'updates by itself' : 'read every minute'})`);
+  clearInterval(slot.battTimer);
+  slot.battTimer = setInterval(() => {
+    if (!mine()) { clearInterval(slot.battTimer); slot.battTimer = 0; return; }
+    chars.forEach((c, k) => { c.readValue().then(v => take(k, v), () => {}); });
+  }, 60000);
+}
+/* "Powerbeats battery 80%", or "Powerbeats battery: Left 80%, Right 75%" when several levels are reported. */
+function batteryText(slot) {
+  const b = slot.batt; if (!b || !b.length) return '';
+  const who = slot.def.batteryOf ? slot.def.batteryOf + ' battery' : 'Battery';
+  const pc = x => `${x.pct}%${x.pct <= 15 ? ' (low)' : ''}`;
+  if (b.length === 1) return `${who} ${pc(b[0])}`;
+  return `${who}: ` + b.map((x, k) => `${x.label || '#' + (k + 1)} ${pc(x)}`).join(', ');
+}
+/* A low battery is said once at 15% and once at 5%, also mid-workout. */
+function batteryCheck(slot) {
+  const v = slot.battery; if (v == null) return;
+  const step = v <= 5 ? 5 : v <= 15 ? 15 : 101;
+  if (step < slot.battWarned) { slot.battWarned = step; if (step <= 15) { toast(`${slot.def.batteryOf || slot.def.name} battery low: ${v}%`, 6000); log(slot, `battery low: ${v}%`); } }
+  else if (v > 25) slot.battWarned = 101;
 }
 /* Open the link and subscribe to heart rate. retrying=true keeps trying quietly.
    Each call is one attempt; a newer attempt or a newly picked device makes an older one stand down. */
@@ -823,7 +872,7 @@ async function connect(slot, retrying) {
 }
 function onDisconnected(slot, dev) {
   if (slot.device !== dev) return;
-  dropChar(slot); slot.hr = null;
+  dropChar(slot); slot.hr = null; clearInterval(slot.battTimer); slot.battTimer = 0;
   if (!slot.want) { setState(slot, 'idle'); return; }
   if (slot.state === 'connected') { log(slot, 'link dropped, reconnecting'); setState(slot, 'lost'); watchAds(slot); scheduleRetry(slot); }
 }
@@ -984,7 +1033,7 @@ const Demo = {
     slots.forEach(s => { detach(s); s.state = 'connected'; s.since = 0; });
     this.emit(-1);
   },
-  stop() { this.on = false; slots.forEach(s => { s.state = 'idle'; s.hr = null; s.battery = null; }); },
+  stop() { this.on = false; slots.forEach(s => { s.state = 'idle'; s.hr = null; s.battery = null; s.batt = []; }); },
   drive(sec) {
     const k = targets(), z = CFG.zones;
     if (W.mode === '4x4') {
@@ -1012,7 +1061,7 @@ const Demo = {
     const v = [lag(5) + nz(0) - 1, lag(2) + nz(1), lag(0) + nz(2), lag(0) + nz(3) + 0.6, lag(3) + nz(4) + 1.2];
     slots.forEach((s, i) => {
       if (i === 0 && sec >= 205 && sec < 232) { s.state = 'lost'; s.hr = null; return; }   // a short dropout, to show how it looks
-      s.state = 'connected'; s.hr = Math.round(v[i]); s.at = performance.now(); s.contact = true; s.battery = [64, 81, 92, 77][i];
+      s.state = 'connected'; s.hr = Math.round(v[i]); s.at = performance.now(); s.contact = true; s.battery = [64, 81, 92, 77, 58][i]; s.batt = [{ label: '', pct: s.battery }];
     });
   }
 };
@@ -1516,7 +1565,7 @@ function slotView(slot) {
   switch (slot.state) {
     case 'connected': {
       const r = reading(slot);
-      if (r != null) return { tone: 'ok', icon: 'check', label: 'Connected', hint: slot.battery != null ? `Battery ${slot.battery}%` : '', value: r };
+      if (r != null) return { tone: 'ok', icon: 'check', label: 'Connected', hint: batteryText(slot), value: r };
       if (slot.contact === false) return { tone: 'warn', icon: 'alert', label: 'Connected, no skin contact', hint: d.contact };
       if (performance.now() - slot.since < 7000) return { tone: 'busy', icon: 'spin', label: 'Connected, waiting for heart rate', hint: '' };
       return { tone: 'warn', icon: 'alert', label: 'Connected, no heart rate', hint: d.nodata };
@@ -1543,6 +1592,7 @@ function sensorSheet(slot) {
     const d = slot.def, v = slotView(slot), on = slot.state === 'connected' || slot.state === 'lost';
     sheetHead(root, d.full);
     root.appendChild(mk('p', 'sh-sub', v.label + (v.value != null ? `, ${Math.round(v.value)} bpm` : '') + (Demo.on ? ' (simulated)' : '')));
+    if (slot.state === 'connected' && slot.batt.length) root.appendChild(mk('p', 'sh-sub', batteryText(slot)));
     root.appendChild(mk('div', 'sh-h', on ? 'If the reading drops out' : d.deviceStep ? 'Do this on the device first' : 'How it becomes visible'));
     const ol = mk('ol', 'sh-steps' + (d.numbered ? '' : ' plain')); d.steps.forEach(s => ol.appendChild(mk('li', '', s))); root.appendChild(ol);
     if (d.note) { const p = mk('p', 'sh-sub', d.note); p.style.margin = '-6px 0 14px'; root.appendChild(p); }
